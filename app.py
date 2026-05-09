@@ -10,7 +10,7 @@ from threading import Thread
 BOT_TOKEN = "8606991432:AAHKgbdzPIOxMzraegxLioB0mpOtDVQNxSA"
 CHANNEL_ID = "@adhaihajz"
 ADHAHI_URL = "https://adhahi.dz/register"
-CHECK_INTERVAL = 10  # فحص كل 10 ثوانٍ (سريع ومناسب لـ Render)
+CHECK_INTERVAL = 10  # فحص كل 10 ثوانٍ
 
 # تخزين حالة الولايات
 wilayas_state = {}
@@ -32,7 +32,8 @@ def send_telegram_message(text):
         "disable_web_page_preview": False
     }
     try:
-        requests.post(url, json=payload, timeout=10)
+        r = requests.post(url, json=payload, timeout=10)
+        print(f"Telegram response: {r.status_code} - {r.text}")
     except Exception as e:
         print(f"Error sending Telegram message: {e}")
 
@@ -50,14 +51,37 @@ def parse_wilayas(html_content):
         return {}
     
     wilayas = {}
-    pattern = r'<option[^>]*>\s*(.*?)\s*[-—|:]\s*(.*?)\s*</option>'
+    
+    # نمط فائق المرونة للبحث عن الـ <option> واستخراج اسم الولاية وحالتها
+    # يبحث عن الأنماط التي تحتوي على شرطة طويلة أو قصيرة أو نقطتين أو حتى فراغات
+    pattern = r'<option[^>]*>\s*([^<]+?)\s*[-—|:]\s*([^<]+?)\s*</option>'
     matches = re.findall(pattern, html_content, re.IGNORECASE | re.DOTALL)
     
+    # إذا لم ينجح النمط الأول، نستخدم نمطاً بديلاً يمسك أي خيار يحتوي على نصوص
+    if not matches:
+        pattern_backup = r'<option[^>]*>([^<]+)</option>'
+        backup_matches = re.findall(pattern_backup, html_content)
+        for opt in backup_matches:
+            opt = opt.strip()
+            if "اختر" in opt or "choisir" in opt.lower() or "select" in opt.lower():
+                continue
+            # نقسم النص إذا كان يحتوي على فواصل لمعرفة الولاية والحالة
+            parts = re.split(r'[-—|:]', opt)
+            if len(parts) >= 2:
+                wilaya_name = parts[0].strip()
+                status_text = parts[1].strip()
+                is_open = "غير متوفر" not in status_text and "fermé" not in status_text.lower()
+                wilayas[wilaya_name] = {
+                    "status": "OPEN" if is_open else "CLOSED",
+                    "raw_status": status_text
+                }
+        return wilayas
+
     for wilaya_name, status in matches:
         wilaya_name = wilaya_name.strip()
         status_text = status.strip()
         
-        if "اختر" in wilaya_name or "choisir" in wilaya_name.lower():
+        if "اختر" in wilaya_name or "choisir" in wilaya_name.lower() or "select" in wilaya_name.lower():
             continue
             
         is_open = "غير متوفر" not in status_text and "fermé" not in status_text.lower() and "no" not in status_text.lower()
@@ -77,6 +101,10 @@ def check_and_notify():
     current_wilayas = parse_wilayas(html)
     if not current_wilayas:
         return
+    
+    # عند أول تشغيل ناجح واكتشاف الولايات، نرسل إشارة نجاح التثبيت للتأكد
+    if current_wilayas and not wilayas_state:
+        send_telegram_message("🚀 **Bot Adhahi.dz يعمل بنجاح الآن!**\n\n✅ تم ربط السيرفر بنجاح وجاري مراقبة الولايات بانتظام.")
     
     for wilaya, data in current_wilayas.items():
         current_status = data["status"]
@@ -108,9 +136,6 @@ def index():
 # تشغيل الفحص الخلفي في Thread منفصل
 monitoring_thread = Thread(target=monitoring_loop, daemon=True)
 monitoring_thread.start()
-
-# رسالة ترحيبية عند أول تشغيل للبوت لنتأكد أنه متصل
-send_telegram_message("🚀 **Bot Adhahi.dz démarré avec succès !**\n\n✅ Surveillance active des réservations...")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000, debug=False)
